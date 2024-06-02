@@ -21,29 +21,29 @@ struct req_props {
   bool error;
 };
 
-struct req_props parse_request(char request[]) {
-  struct req_props props;
-  props.error = true;
-  // char *token;
+int parse_request(char request[], char **method, char **resource,
+                  char **protocol) {
   const char *whitespace = " ";
   const char *line_terminator = "\r";
-  props.method = strsep(&request, whitespace);
-  if (props.method == NULL) {
+  *method = strsep(&request, whitespace);
+  if (*method == NULL) {
     fprintf(stderr, "%s Parsing method failed: %s\n", LOG_ERROR,
             strerror(errno));
+    return -1;
   }
-  props.resource = strsep(&request, whitespace);
-  if (props.resource == NULL) {
+  *resource = strsep(&request, whitespace);
+  if (*resource == NULL) {
     fprintf(stderr, "%s Parsing resource failed: %s\n", LOG_ERROR,
             strerror(errno));
+    return -1;
   }
-  props.protocol = strsep(&request, line_terminator);
-  if (props.protocol == NULL) {
+  *protocol = strsep(&request, line_terminator);
+  if (*protocol == NULL) {
     fprintf(stderr, "%s Parsing protocol failed: %s\n", LOG_ERROR,
             strerror(errno));
+    return -1;
   }
-  props.error = false;
-  return props;
+  return 0;
 }
 
 int handle_request(int new_socket) {
@@ -59,15 +59,18 @@ int handle_request(int new_socket) {
   buffer[bytes_read] = '\0';
 
   // parse the request
-  struct req_props req_props = parse_request(buffer);
-  if (req_props.error == true) {
+  int parsed;
+  char *method;
+  char *resource;
+  char *protocol;
+  parsed = parse_request(buffer, &method, &resource, &protocol);
+  if (parsed < 0) {
     fprintf(stderr, "%s Error parsing request: %s\n", LOG_ERROR,
             strerror(errno));
     return -1;
   }
-  printf("%s Request %s %s %s\n", LOG_INFO, req_props.method,
-         req_props.resource, req_props.protocol);
-  if (strcmp(req_props.resource, "/") == 0) {
+  printf("%s Request %s %s %s\n", LOG_INFO, method, resource, protocol);
+  if (strcmp(resource, "/") == 0) {
     const char *response = "HTTP/1.1 200 OK\r\nContent-Type: "
                            "text/html\r\n\r\n<h1>Welcome to the page!</h1>\n";
     write(new_socket, response, strlen(response));
