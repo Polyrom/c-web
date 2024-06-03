@@ -1,5 +1,7 @@
 build-server:
-	clang -Wall server.c -o bin/server
+	clang -c http_server_client.c -I.
+	clang -c http_server.c -I.
+	clang http_server_client.o http_server.o -o bin/server
 run-server:
 	./bin/server
 build-db:

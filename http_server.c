@@ -1,3 +1,4 @@
+#include "http_server.h"
 #include <errno.h>
 #include <netinet/in.h>
 #include <stdbool.h>
@@ -7,19 +8,35 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#define SERVER_PORT 8003
 #define REQ_QUEUE_SIZE 10
 #define BUFFER_SIZE 1024
 
 #define LOG_INFO "INFO:"
 #define LOG_ERROR "ERROR:"
 
-struct req_props {
-  char *method;
-  char *resource;
-  char *protocol;
-  bool error;
-};
+router_t *new_router() {
+  router_t *router = (router_t *)malloc(sizeof(router_t));
+  router->routes = NULL;
+  return router;
+}
+
+void free_router(router_t *router) {
+  route_t *current = router->routes;
+  while (current != NULL) {
+    route_t *temp = current;
+    current = current->next;
+    free(temp);
+  }
+  free(router);
+}
+
+void register_route(router_t *router, char *path, void (*handler)(int sock)) {
+  route_t *new_route = (route_t *)malloc(sizeof(route_t));
+  new_route->path = path;
+  new_route->handler = handler;
+  new_route->next = router->routes;
+  router->routes = new_route;
+}
 
 int parse_request(char request[], char **method, char **resource,
                   char **protocol) {
@@ -46,7 +63,18 @@ int parse_request(char request[], char **method, char **resource,
   return 0;
 }
 
-int handle_request(int new_socket) {
+void (*find_handler_func(router_t *router, char *resource))(int sock) {
+  route_t *current = router->routes;
+  while (current != NULL) {
+    if (strcmp(current->path, resource) == 0) {
+      return current->handler;
+    }
+    current = current->next;
+  }
+  return NULL;
+}
+
+int handle_request(router_t *router, int new_socket) {
   // write request into a buffer
   char buffer[BUFFER_SIZE];
   int bytes_read = read(new_socket, buffer, BUFFER_SIZE - 1);
@@ -55,30 +83,21 @@ int handle_request(int new_socket) {
             strerror(errno));
     return -1;
   }
-
   buffer[bytes_read] = '\0';
 
   // parse the request
-  int parsed;
   char *method;
   char *resource;
   char *protocol;
-  parsed = parse_request(buffer, &method, &resource, &protocol);
+  int parsed = parse_request(buffer, &method, &resource, &protocol);
   if (parsed < 0) {
     fprintf(stderr, "%s Error parsing request: %s\n", LOG_ERROR,
             strerror(errno));
     return -1;
   }
   printf("%s Request %s %s %s\n", LOG_INFO, method, resource, protocol);
-  if (strcmp(resource, "/") == 0) {
-    const char *response = "HTTP/1.1 200 OK\r\nContent-Type: "
-                           "text/html\r\n\r\n<h1>Welcome to the page!</h1>\n";
-    write(new_socket, response, strlen(response));
-  } else {
-    const char *response = "HTTP/1.1 404 Not Found\r\nContent-Type: "
-                           "text/html\r\n\r\n<h1>404 Not Found</h1>\n";
-    write(new_socket, response, strlen(response));
-  }
+  void (*handler_func)(int sock) = find_handler_func(router, resource);
+  handler_func(new_socket);
   return 0;
 }
 
@@ -103,7 +122,7 @@ int set_up_listener(struct sockaddr_in address) {
 
   // bind socket to address and port
   int addrlen = sizeof(address);
-  printf("%s Binding socket to port %d\n", LOG_INFO, SERVER_PORT);
+  printf("%s Binding socket to port %d\n", LOG_INFO, htons(address.sin_port));
   if ((bind(server_fd, (struct sockaddr *)&address, addrlen)) < 0) {
     fprintf(stderr, "%s Binding socket failed: %s\n", LOG_ERROR,
             strerror(errno));
@@ -111,17 +130,19 @@ int set_up_listener(struct sockaddr_in address) {
   }
 
   // listen to address on socket
-  printf("%s Initializing listening on port %d\n", LOG_INFO, SERVER_PORT);
+  printf("%s Initializing listening on port %d\n", LOG_INFO,
+         htons(address.sin_port));
   if ((listen(server_fd, REQ_QUEUE_SIZE)) < 0) {
     fprintf(stderr, "%s Listening to socket failed: %s\n", LOG_ERROR,
             strerror(errno));
     exit(EXIT_FAILURE);
   }
 
-  printf("%s Server listening on port %d\n", LOG_INFO, SERVER_PORT);
+  printf("%s Server listening on port %d\n", LOG_INFO, htons(address.sin_port));
   return server_fd;
 }
-int listen_and_serve(struct sockaddr_in address) {
+
+int listen_and_serve(router_t *router, struct sockaddr_in address) {
   int server_fd, cli_addrlen, new_socket;
   struct sockaddr cli_address;
   cli_addrlen = sizeof(cli_address);
@@ -134,22 +155,10 @@ int listen_and_serve(struct sockaddr_in address) {
               strerror(errno));
       return -1;
     }
-    if (handle_request(new_socket) < 0) {
+    if (handle_request(router, new_socket) < 0) {
       fprintf(stderr, "%s Handle request: %s\n", LOG_ERROR, strerror(errno));
     }
     close(new_socket);
-  }
-  return 0;
-}
-
-int main(void) {
-  struct sockaddr_in address;
-  address.sin_family = AF_INET;
-  address.sin_addr.s_addr = INADDR_ANY;
-  address.sin_port = htons(SERVER_PORT);
-  if (listen_and_serve(address) < 0) {
-    fprintf(stderr, "%s Server error: %s\n", LOG_ERROR, strerror(errno));
-    exit(EXIT_FAILURE);
   }
   return 0;
 }
